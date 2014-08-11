@@ -77,7 +77,7 @@ function warn {
 }
 
 function debug {
-    has_option "debug" || return
+    has_option "debug" || return 0
     echo "debug: $*" | fold -s 1>&2
 }
 
@@ -137,13 +137,13 @@ function save_option {
 
 function is_valid_option {
     local settings=("host" "force" "debug" "shim_system_binaries"
-        "skip_remote_cleanup" "use_login_shell")
+        "skip_remote_cleanup")
     in_array "$1" "${settings[@]}"
 }
 
 function set_options_from_args {
     for arg in $*; do
-        [ "$arg" = "--" ] && return
+        [ "$arg" = "--" ] && return 0
         [[ "$arg" == *=* ]] || continue
 
         local key="${arg%=*}"
@@ -172,6 +172,12 @@ function remove_options_from_args {
     echo "${output[@]}"
 }
 
+function check_requirements {
+    for command in "ssh" "sshfs" "git"; do
+        which "$command" &>/dev/null || die "Can't find $command in \$PATH"
+    done
+}
+
 function set_remote {
     export SSH_HOST="$1"
 }
@@ -192,7 +198,7 @@ function mount_remote {
     local remote="$SSH_HOST:$1"
     local local="$2"
 
-    is_mounted "$1" && return
+    is_mounted "$1" && return 0
 
     [ -d "$mount_path" ] || mkdir -p "$mount_path" \
         || die "Unable to create $mount_path"
@@ -202,7 +208,13 @@ function mount_remote {
 }
 
 function unmount_remote {
-    is_mounted "$1" && umount "$1"
+    is_mounted "$1" || return 0
+
+    if [ "$(which fusermount)" != "" ]; then
+        fusermount -u "$1"
+    else
+        umount "$1"
+    fi
 }
 
 function on_remote_directory_exists {
@@ -260,7 +272,7 @@ function clone_repository_on_remote {
     local repository="$1"
     local remote_path="$2"
 
-    check_for_conflicts_before_clone "$repository" "$remote_path" || return
+    check_for_conflicts_before_clone "$repository" "$remote_path" || return 0
     on_remote "test -d \"$remote_path\" || mkdir -p \"$remote_path\"" \
         || die "Unable to create $remote_path on $SSH_HOST"
     on_remote "git clone -q \"$repository\" \"$remote_path\"" \
@@ -328,7 +340,7 @@ function find_project_by_path {
 function find_project_by_name {
     local target="$1"
 
-    [ -d "$WORKSPACE_HOME/$target" ] || return
+    [ -d "$WORKSPACE_HOME/$target" ] || return 1
     find_project_by_path "$WORKSPACE_HOME/$target"
 }
 
@@ -353,7 +365,7 @@ function find_project {
 }
 
 function find_all_projects_by_host {
-    [[ "$1" == @* ]] || return
+    [[ "$1" == @* ]] || return 0
 
     local search="$(echo "${1#@}" | tr '%' '*')"
 
@@ -363,7 +375,7 @@ function find_all_projects_by_host {
 }
 
 function find_all_projects_by_path {
-    [[ "$1" == @* ]] && return
+    [[ "$1" == @* ]] && return 0
 
     local search="$(echo "$1" | tr '%' '*')"
     for path in $search; do find_project_by_path "$path"; done
@@ -455,7 +467,7 @@ function is_system_binary {
 }
 
 function shim_list {
-    is_empty_directory $SHIMS_PATH && return
+    is_empty_directory $SHIMS_PATH && return 0
     for shim in $SHIMS_PATH/*; do echo "$(basename $shim)"; done
 }
 
@@ -472,7 +484,7 @@ function shim_add {
 
         cat >"$shim_path" <<END
 #!/usr/bin/env bash
-exec $0 use_login_shell="$(get_option "use_login_shell")" -- exec $command \$*
+exec $0 -- exec $command \$*
 END
         chmod 755 "$shim_path"
     done
@@ -713,8 +725,6 @@ host: A default host for SSH.
 
 skip_remote_cleanup: When removing a project, don't delete the copy of the repository on the remote machine.
 
-use_login_shell: Force a login shell for all SSH commands.
-
 END
 }
 
@@ -890,9 +900,9 @@ function help_exec {
     message <<END
 usage: $(script_name) exec [options]
 
-Runs a single command on the remote machine for the current workspace. Pass "use_login_shell=yes" as an option to run the command in a login shell:
+Runs a single command on the remote machine for the current workspace:
 
-    $(script_name) exec whoami use_login_shell=yes
+    $(script_name) exec whoami
 
 If you want to pass options to the remote script, add them after a double-dash:
 
@@ -931,5 +941,6 @@ export WORKSPACE_HOME=${WORKSPACE_HOME:-$HOME/ws}
 export PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 enable_termination_from_functions
+check_requirements
 set_options_from_args "$*"
 run $(remove_options_from_args "$*") 2>&1

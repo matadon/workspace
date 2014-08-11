@@ -22,8 +22,8 @@ none of the tools on your local machine.
 Enter Workspace: Smooth integration between your laptop and your remote and/or
 virtual development boxes.
 
-Only requirements are `ssh`, `sshfs`, `bash`, and `git`. Note that I've only
-tested it on an OSX host with Linux remotes.
+Workspace requires only  `ssh`, `sshfs`, `bash`, and `git` to run, and has
+been tested on OS X and Ubuntu Linux.
 
 Repositories live on the remotes, and are mounted locally via `sshfs`.
 
@@ -109,7 +109,6 @@ See `ws help` for more details.
 Add the following to your `~/.ssh/config`:
 
     # Re-use connections.
-    AddressFamily inet # not for ipv6
     ControlMaster auto
     ControlPath ~/.ssh/tmp/%r@%h:%p
     ControlPersist yes
