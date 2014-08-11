@@ -1,0 +1,307 @@
+#
+# Run this with shelltest ws.test
+#
+
+function do_ssh {
+    local host="$1"; shift
+    ssh -o PasswordAuthentication=no -qT $host "$*" 2>&1
+}
+
+function git_basename {
+    basename "$1" | sed s/\.git$//
+}
+
+function before_all {
+    [ -x "$(which workspace)" ] || abort "Can't find workspace script."
+
+    export WORKSPACE_RELATIVE_HOME="tmp/workspace-test"
+    export WORKSPACE_TEST_HOME="$HOME/$WORKSPACE_RELATIVE_HOME"
+    export WORKSPACE_HOME="$WORKSPACE_TEST_HOME"
+
+    export RED="jayne.local"
+    export RED_WILDCARD="jayne.%"
+    do_ssh $RED true || abort "ssh to $HOST broken"
+
+    export BLUE="kaylee.local"
+    do_ssh $BLUE true || abort "ssh to $OTHER_HOST broken"
+
+    export ALICE="git@github.com:matadon/rbenv-gem-rehash.git"
+    export ALICE_WILDCARD="rbenv%"
+    export BOB="git@github.com:matadon/sprockets-blackcoffee.git"
+    export CHARLIE="git@github.com:matadon/postinius.git"
+
+    do_ssh git@github.com | grep -q "successfully authenticated" \
+        || abort "ssh to github.com broken"
+}
+
+function after_each {
+    umount $WORKSPACE_TEST_HOME/client/*
+    umount $WORKSPACE_TEST_HOME/*
+
+    [ -d "$WORKSPACE_TEST_HOME" ] && rm -fr "$WORKSPACE_TEST_HOME"
+    do_ssh $RED "test -d \"$WORKSPACE_RELATIVE_HOME\" && rm -fr \"$WORKSPACE_RELATIVE_HOME\""
+    do_ssh $BLUE "test -d \"$WORKSPACE_RELATIVE_HOME\" && rm -fr \"$WORKSPACE_RELATIVE_HOME\""
+    true
+}
+
+function test_workspace_takes_config_from_environment {
+    workspace init | grep -q "$HOME/tmp/workspace-test" \
+        || abort "Workspace not reading WORKSPACE_HOME from environment."
+}
+
+function test_set_and_get {
+    workspace set host $RED || fail
+    [ "$(workspace get host)" = "$RED" ] || abort
+}
+
+function test_set_requires_valid_option {
+    ! workspace set invalid_option
+}
+
+function test_add_repo {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED || fail
+
+    [ -d "$WORKSPACE_HOME/$name" ] || fail
+    [ -d "$WORKSPACE_HOME/$name/.git" ] || fail
+    do_ssh $RED "test -d \"$WORKSPACE_RELATIVE_HOME/$name\"" || fail
+}
+
+function test_add_repo_on_default_host {
+    local name="$(git_basename $ALICE)"
+
+    workspace set host $RED || fail
+    workspace add $ALICE || fail
+
+    [ -d "$WORKSPACE_HOME/$name" ] || fail
+    [ -d "$WORKSPACE_HOME/$name/.git" ] || fail
+    do_ssh $RED "test -d \"$WORKSPACE_RELATIVE_HOME/$name\"" || fail
+}
+
+function test_add_repo_in_namespace {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED client || fail
+
+    [ -d "$WORKSPACE_HOME/$name" ] && fail
+    [ -d "$WORKSPACE_HOME/client/$name" ] || fail
+    [ -d "$WORKSPACE_HOME/client/$name/.git" ] || fail
+    do_ssh $RED "test -d \"$WORKSPACE_RELATIVE_HOME/client/$name\"" || fail
+}
+
+function test_add_repo_in_namespace_with_default_host {
+    local name="$(git_basename $ALICE)"
+
+    workspace set host $RED || fail
+    workspace add $ALICE - client || fail
+
+    [ -d "$WORKSPACE_HOME/$name" ] && fail
+    [ -d "$WORKSPACE_HOME/client/$name" ] || fail
+    [ -d "$WORKSPACE_HOME/client/$name/.git" ] || fail
+    do_ssh $RED "test -d \"$WORKSPACE_RELATIVE_HOME/client/$name\"" || fail
+}
+
+function test_add_repo_conflict {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $ALICE $RED && fail
+
+    [ ! -e "$WORKSPACE_HOME/$name/$name" ] || fail
+}
+
+function test_remove_repo_forced {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED || fail
+    workspace remove $name force=yes
+
+    [ -e "$WORKSPACE_HOME/$name" ] && fail
+    do_ssh $RED "test -e \"$WORKSPACE_RELATIVE_HOME/$name\"" && fail
+
+    pass
+}
+
+function test_remove_destroy_namespace_if_empty {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED client || fail
+    workspace remove $ALICE force=yes || fail
+
+    [ -e "$WORKSPACE_HOME/client/$name" ] && fail
+    [ -e "$WORKSPACE_HOME/client" ] && fail
+
+    do_ssh $RED "test -e \"$WORKSPACE_RELATIVE_HOME/client/$name\"" && fail
+    do_ssh $RED "test -e \"$WORKSPACE_RELATIVE_HOME/client" && fail
+
+    pass
+}
+
+function test_remove_preserve_namespace_if_not_empty {
+    local name="$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED client || fail
+    workspace add $BOB $RED client || fail
+    workspace remove $ALICE force=yes || fail
+
+    [ -e "$WORKSPACE_HOME/client/$name" ] && fail
+    [ -e "$WORKSPACE_HOME/client" ] || fail
+
+    do_ssh $RED "test -e $WORKSPACE_RELATIVE_HOME/client/$name" && fail
+    do_ssh $RED "test -e $WORKSPACE_RELATIVE_HOME/client" || fail
+
+    pass
+}
+
+function test_shim_and_unshim_forced {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local local_hostname="$(hostname)"
+    local remote_hostname="$(do_ssh $RED hostname)"
+
+    [ "$local_hostname" != "$remote_hostname" ] || fail
+
+    eval "$(workspace init)"
+    workspace shim hostname force=yes || fail
+    workspace add $ALICE $RED || fail
+
+    [ "$(cd $HOME; hostname)" = "$local_hostname" ] || fail
+    [ "$(cd $alice_path; hostname)" = "$remote_hostname" ] || fail
+
+    workspace unshim hostname || fail
+
+    [ "$(cd $HOME; hostname)" = "$local_hostname" ] || fail
+    [ "$(cd $alice_path; hostname)" = "$local_hostname" ] || fail
+}
+
+function test_down_by_name {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $RED || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+
+    workspace down "$(git_basename $ALICE)"
+
+    [ "$(ls -A $alice_path)" = "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_down_by_repository {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $RED || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+
+    workspace down "$ALICE"
+
+    [ "$(ls -A $alice_path)" = "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_down_by_host {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $BLUE || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+
+    workspace down @"$RED"
+
+    [ "$(ls -A $alice_path)" = "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_down_by_host_wildcard {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $BLUE || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+
+    workspace down @"$RED_WILDCARD"
+
+    [ "$(ls -A $alice_path)" = "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_down_by_name_wildcard {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $RED || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+
+    workspace down "$ALICE_WILDCARD"
+
+    [ "$(ls -A $alice_path)" = "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_down_idempotent {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    workspace add $ALICE $RED || fail
+    workspace down $ALICE || fail
+    workspace down $ALICE || fail
+}
+
+function test_up {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+
+    workspace add $ALICE $RED || fail
+    workspace down $ALICE || fail
+    workspace up $ALICE || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+}
+
+function test_up_idempotent {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    workspace add $ALICE $RED || fail
+    workspace up $ALICE || fail
+    workspace up $ALICE || fail
+}
+
+function test_restore {
+    local alice_path="$WORKSPACE_HOME/$(git_basename $ALICE)"
+    local bob_path="$WORKSPACE_HOME/$(git_basename $BOB)"
+
+    workspace add $ALICE $RED || fail
+    workspace add $BOB $RED || fail
+
+    umount "$alice_path" || fail
+
+    workspace restore || fail
+
+    [ "$(ls -A $alice_path)" != "" ] || fail
+    [ "$(ls -A $bob_path)" != "" ] || fail
+}
+
+function test_info {
+    pending
+}
+
+function test_list {
+    pending
+}
+
+function test_list_with_format {
+    pending
+}
+
