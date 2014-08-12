@@ -8,10 +8,19 @@ function sed_escape {
     echo "$*" | sed -e 's/[]\/()$*.^|[]/\\&/g'
 }
 
-function forward_stdin {
+function stdin_is_pipe {
+    [ ! -t 0 ]
+}
+
+function forward_pipe {
     local method="$1"; shift
-    [[ -t 0 ]] || cat
+    stdin_is_pipe && cat
     [ "$method" != "" ] && $method $*
+}
+
+function unique {
+    IFS=$'\n'
+    echo "$*" | sort -u
 }
 
 function in_array {
@@ -120,6 +129,21 @@ function load_options {
     source "$1"
 }
 
+function in_file {
+    local file="$1"
+    local content="$2"
+
+    grep -q "$content" "$file" 2>/dev/null
+}
+
+function replace_in_file {
+    local file="$1"
+    local match="$2"
+    local replacement="$(sed_escape "$3")"
+
+    sed -i "" "s/$match/$replacement/" "$file"
+}
+
 function save_option {
     local file="$1"
     local key="_option_$2"
@@ -127,9 +151,8 @@ function save_option {
 
     [ ! -f $file ] && touch $file
 
-    if grep -q "$key\=" $file; then
-        local escaped_value="$(sed_escape "$value")"
-        sed -i "" "s/^.*$key\=.*$/export $key\=$escaped_value/" $file
+    if in_file "$file" "$key\="; then
+        replace_in_file "$file" "^.*$key\=.*$" "export $key=$value"
     else
         echo "export $key=$value" >> $file
     fi
@@ -399,20 +422,22 @@ function find_all_projects_by_repository {
 
 function find_all_projects {
     find_all_projects_by_host "$1" \
-        | forward_stdin "find_project_by_path" "$1" \
-        | forward_stdin "find_all_projects_by_name" "$1" \
-        | forward_stdin "find_all_projects_by_repository" "$1" \
-        | sort | uniq
+        | forward_pipe "find_project_by_path" "$1" \
+        | forward_pipe "find_all_projects_by_name" "$1" \
+        | forward_pipe "find_all_projects_by_repository" "$1"
 }
 
 function each_project {
     local method="$1"; shift
+    local projects=()
 
-    for token in "$*"; do
+    for token in $*; do
         for project in $(find_all_projects "$token"); do
-            $method "$project"
+            projects+=("$project")
         done
     done
+
+    for project in $(unique ${projects[@]}); do $method "$project"; done
 }
 
 function confirm_remove {
