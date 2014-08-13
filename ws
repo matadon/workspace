@@ -86,7 +86,7 @@ function warn {
 }
 
 function debug {
-    has_option "debug" || return 0
+    has_setting "debug" || return 0
     echo "debug: $*" | fold -s 1>&2
 }
 
@@ -110,29 +110,28 @@ function strip_from_path {
         '$0 ~ item {next} {print}' | sed 's/:*$//'
 }
 
-function set_option {
-    is_valid_option "$1" || warn "set_option called for unknown option: $1"
-    export "_option_$1"="$2"
+function set_setting {
+    is_valid_setting "$1" || warn "set_setting called for unknown setting: $1"
+    export "_setting_$1"="$2"
 }
 
-function get_option {
-    is_valid_option "$1" || warn "get_option called for unknown option: $1"
-    local key="_option_$1"
+function get_setting {
+    is_valid_setting "$1" || warn "get_setting called for unknown setting: $1"
+    local key="_setting_$1"
     echo "${!key}"
 }
 
-function has_option {
-    [ "$(get_option "$1")" = "yes" ] || [ "$(get_option "$1")" = "true" ]
+function has_setting {
+    [ "$(get_setting "$1")" = "yes" ] || [ "$(get_setting "$1")" = "true" ]
 }
 
-function load_options {
+function load_settings {
     source "$1"
 }
 
 function in_file {
     local file="$1"
     local content="$2"
-
     grep -q "$content" "$file" 2>/dev/null
 }
 
@@ -144,9 +143,9 @@ function replace_in_file {
     sed -i "" "s/$match/$replacement/" "$file"
 }
 
-function save_option {
+function save_setting {
     local file="$1"
-    local key="_option_$2"
+    local key="_setting_$2"
     local value="\"$3\""
 
     [ ! -f $file ] && touch $file
@@ -158,26 +157,26 @@ function save_option {
     fi
 }
 
-function is_valid_option {
+function is_valid_setting {
     local settings=("host" "force" "debug" "shim_system_binaries"
         "skip_remote_cleanup")
     in_array "$1" "${settings[@]}"
 }
 
-function set_options_from_args {
+function add_settings_from_args {
     for arg in $*; do
         [ "$arg" = "--" ] && return 0
         [[ "$arg" == *=* ]] || continue
 
         local key="${arg%=*}"
-        is_valid_option "$key" || continue
+        is_valid_setting "$key" || continue
 
         local value="${arg#*=}"
-        set_option "$key" "$value"
+        set_setting "$key" "$value"
     done
 }
 
-function remove_options_from_args {
+function remove_settings_from_args {
     local -a output
     local -a passthrough
 
@@ -186,7 +185,7 @@ function remove_options_from_args {
             passthrough="true"
         elif [[ "$passthrough" = "" && "$arg" == *=* ]]; then
             local key="${arg%=*}"
-            is_valid_option "$key" || output=("${output[@]}" "$arg")
+            is_valid_setting "$key" || output=("${output[@]}" "$arg")
         else
             output=("${output[@]}" "$arg")
         fi
@@ -225,8 +224,8 @@ function mount_remote {
 
     [ -d "$mount_path" ] || mkdir -p "$mount_path" \
         || die "Unable to create $mount_path"
-    local sshfs_options="-o reconnect -o uid=$(id -u) -o gid=$(id -g)"
-    sshfs $sshfs_options $remote $local &>/dev/null \
+    local sshfs_settings="-o reconnect -o uid=$(id -u) -o gid=$(id -g)"
+    sshfs $sshfs_settings $remote $local &>/dev/null \
         || die "Unable to mount $remote at $local"
 }
 
@@ -256,7 +255,7 @@ function maybe_host {
     local host="$1"
 
     if [[ "$host" = "-" || "$host" = "" ]]; then
-        host="$(get_option "host")"
+        host="$(get_setting "host")"
         [ "$host" = "" ] && die "No default host has been set."
     fi
 
@@ -274,7 +273,7 @@ function initialize {
     export PATH="$(strip_from_path "$SHIMS_PATH")"
 
     [ -d "$SHIMS_PATH" ] || mkdir -p "$SHIMS_PATH"
-    [ -f "$SETTINGS_FILE" ] && load_options "$SETTINGS_FILE"
+    [ -f "$SETTINGS_FILE" ] && load_settings "$SETTINGS_FILE"
 }
 
 function check_for_conflicts_before_clone {
@@ -449,7 +448,7 @@ function confirm_remove {
     message <<END
 Removing this project will delete the associated cloned repository on "$host". You will lose anything that hasn't been pushed upstream, including things like database passwords that aren't usually kept in the repository by sane individuals.
 
-If you want to keep these files on the remote, re-run $(script_name) with the "skip_remote_cleanup" option:
+If you want to keep these files on the remote, re-run $(script_name) with the "skip_remote_cleanup" setting:
 
     $(script_name) remove $target skip_remote_cleanup=yes
 
@@ -503,7 +502,7 @@ function shim_add {
         is_shell_builtin "$command" \
             && die "Can't shim a shell builtin: $command"
 
-        none_of "has_option" "force" "shim_system_binaries" \
+        none_of "has_setting" "force" "shim_system_binaries" \
             && is_system_binary "$command" \
             && die "Can't shim a system binary: $command"
 
@@ -550,15 +549,15 @@ function run_set {
     local key="$1"
     local value="$2"
 
-    is_valid_option "$key" || die "unknown setting: $key"
-    save_option "$SETTINGS_FILE" "$key" "$value"
+    is_valid_setting "$key" || die "unknown setting: $key"
+    save_setting "$SETTINGS_FILE" "$key" "$value"
 }
 
 function run_get {
     local key="$1"
 
-    is_valid_option "$key" || die "unknown setting: $key"
-    message "$(get_option "$key")"
+    is_valid_setting "$key" || die "unknown setting: $key"
+    message "$(get_setting "$key")"
 }
 
 function run_add {
@@ -601,11 +600,11 @@ function run_remove {
     local project_path="$(find_project "$target")"
     local namespace="$(project_namespace "$project_path")"
 
-    any_of "has_option" "skip_remote_cleanup" "force" \
+    any_of "has_setting" "skip_remote_cleanup" "force" \
         || confirm_remove "$target" "$project_path"
 
     run_down "$1"
-    has_option "skip_remote_cleanup" \
+    has_setting "skip_remote_cleanup" \
         || on_remote rm -rf "$(project_remote_path "$project_path")"
     rmdir "$(project_mount_path "$project_path")"
     rm -rf "$project_path"
@@ -660,7 +659,7 @@ END
 }
 
 #
-# TODO: Add format option, default to just listing projects by name.
+# TODO: Add format setting, default to just listing projects by name.
 #
 function run_list {
     for project in $(project_list); do
@@ -672,7 +671,7 @@ function run_list {
 }
 
 #
-# TODO: Add a remote_only option to limit commands to *only* run on the
+# TODO: Add a remote_only setting to limit commands to *only* run on the
 # remote machine.
 #
 function run_shim {
@@ -742,9 +741,9 @@ function run_help {
 
 function help_set {
     message <<END
-usage: $(script_name) set [option] [value]
+usage: $(script_name) set [setting] [value]
 
-Configures the workspace script; settings configured here are persisted to disk. Any setting may also be specified on the command line as an "option-value" pair Valid settings are: 
+Configures the workspace script; settings configured here are persisted to disk. Any setting may also be specified on the command line as an "setting-value" pair Valid settings are: 
 
 host: A default host for SSH.
 
@@ -755,9 +754,9 @@ END
 
 function help_get {
     message <<END
-usage: $(script_name) get [option]
+usage: $(script_name) get [setting]
 
-Returns the current value for [option]; most useful is probably "$(script_name) get host"
+Returns the current value for [setting]; most useful is probably "$(script_name) get host"
 
 END
 }
@@ -895,7 +894,7 @@ Adds a shim for running commands on remote machines if and only if you are in a 
 
     local
 
-Shims can be created for any command except for shell builtins. By default, workspace will refuse to create a shim for any of the files in "/bin", "/sbin", and "/usr/sbin", but this behavior can be overridden with the "shim_system_binaries=yes" or "force="yes" options:
+Shims can be created for any command except for shell builtins. By default, workspace will refuse to create a shim for any of the files in "/bin", "/sbin", and "/usr/sbin", but this behavior can be overridden with the "shim_system_binaries=yes" or "force="yes" settings:
 
     $ ws shim ls
 
@@ -923,13 +922,13 @@ END
 
 function help_exec {
     message <<END
-usage: $(script_name) exec [options]
+usage: $(script_name) exec [settings]
 
 Runs a single command on the remote machine for the current workspace:
 
     $(script_name) exec whoami
 
-If you want to pass options to the remote script, add them after a double-dash:
+If you want to pass settings to the remote script, add them after a double-dash:
 
     $(script_name) exec -- my_command my_choice=cake
 
@@ -967,5 +966,5 @@ export PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 enable_termination_from_functions
 check_requirements
-set_options_from_args "$*"
-run $(remove_options_from_args "$*") 2>&1
+add_settings_from_args "$*"
+run $(remove_settings_from_args "$*") 2>&1
