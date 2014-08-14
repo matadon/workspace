@@ -159,7 +159,7 @@ function save_setting {
 
 function is_valid_setting {
     local settings=("host" "force" "debug" "shim_system_binaries"
-        "skip_remote_cleanup")
+        "skip_remote_cleanup" "allocate_tty")
     in_array "$1" "${settings[@]}"
 }
 
@@ -205,7 +205,11 @@ function set_remote {
 }
 
 function on_remote {
-    ssh -qt $SSH_HOST "$*"
+    if has_setting "allocate_tty"; then
+        ssh -qt $SSH_HOST "$*"
+    else
+        ssh -q $SSH_HOST "$*"
+    fi
 }
 
 function remote_shell {
@@ -284,6 +288,7 @@ function check_for_conflicts_before_clone {
     on_remote_directory_is_empty "$remote_path" && return 0
 
     local remote_git_url="$(on_remote_get_git_url "$remote_path")"
+
     [ "$remote_git_url" = "$repository" ] && return 1
     [ "$remote_git_url" = "" ] \
         && die "$remote_path exists on $SSH_HOST and is not empty."
@@ -694,6 +699,7 @@ function run_exec {
     local project_path="$(find_project_by_path "$PWD")"
 
     if [ "$project_path" = "" ]; then
+        set_setting "allocate_tty" "yes"
         exec $*
     else
         local mount_path="$(project_mount_path "$project_path")"
