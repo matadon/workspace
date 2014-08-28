@@ -5,7 +5,7 @@ laptop.
 
 Not only do you need to install a bunch of libraries and databases only
 needed to develop that one app -- and then never clean it out -- but you're
-probably running different library versions, and a different OS, then your
+probably running different library versions, and a different OS, than your
 server environment.
 
 So when you go to deploy, there's no end to the fun you can have. Of course,
