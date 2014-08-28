@@ -137,10 +137,12 @@ function in_file {
 
 function replace_in_file {
     local file="$1"
+    local tempfile="$1.$RANDOM"
     local match="$2"
     local replacement="$(sed_escape "$3")"
 
-    sed -i "" "s/$match/$replacement/" "$file"
+    sed "s/$match/$replacement/" < "$file" > "$tempfile" \
+        && rm -f "$file" && mv "$tempfile" "$file"
 }
 
 function save_setting {
@@ -699,7 +701,6 @@ function run_exec {
     local project_path="$(find_project_by_path "$PWD")"
 
     if [ "$project_path" = "" ]; then
-        set_setting "allocate_tty" "yes"
         exec $*
     else
         local mount_path="$(project_mount_path "$project_path")"
@@ -707,6 +708,7 @@ function run_exec {
         local relative_path="$(relative_path_for "$PWD" "$mount_path")"
         local combined_path="$remote_path/$relative_path"
 
+        set_setting "allocate_tty" "yes"
         set_remote "$(project_host "$project_path")"
         on_remote "(cd "$combined_path" ; $*)"
     fi
